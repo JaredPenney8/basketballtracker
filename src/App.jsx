@@ -161,6 +161,52 @@ function saveStorage(data) {
   }
 }
 
+function exportAppData(data) {
+  try {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    a.href = url;
+    a.download = `basketball-tracker-backup-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error("Failed to export tracker data", error);
+    window.alert("Export failed.");
+  }
+}
+
+function importAppDataFromFile(file, onSuccess) {
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = (event) => {
+    try {
+      const parsed = JSON.parse(event.target.result);
+      const safeData = ensureAppShape(parsed);
+      onSuccess(safeData);
+      window.alert("Import successful.");
+    } catch (error) {
+      console.error("Failed to import tracker data", error);
+      window.alert("Import failed. Please choose a valid backup file.");
+    }
+  };
+
+  reader.onerror = () => {
+    window.alert("Could not read file.");
+  };
+
+  reader.readAsText(file);
+}
+
 function createBlankPlayerStats() {
   return {
     points: 0,
@@ -397,16 +443,65 @@ function createGameFromLive({ opponent, tracked, players, gameDate }) {
 }
 
 function ensureSeasonShape(season) {
+  const normalizedPlayers = Array.isArray(season.players)
+    ? season.players.map((player) => {
+        if (typeof player === "string") {
+          return {
+            id: createId(),
+            name: player,
+            jersey: "",
+          };
+        }
+
+        return {
+          id: player?.id || createId(),
+          name: player?.name || "Unnamed Player",
+          jersey: player?.jersey || "",
+        };
+      })
+    : [];
+
+  const normalizedGames = Array.isArray(season.games)
+    ? season.games.map((game) => ({
+        id: game?.id || createId(),
+        date: game?.date || new Date().toISOString().slice(0, 10),
+        opponent: game?.opponent || "",
+        tracked: { ...DEFAULT_TRACKED, ...(game?.tracked || {}) },
+        finalScore: {
+          us: safeNumber(game?.finalScore?.us),
+          them: safeNumber(game?.finalScore?.them),
+        },
+        shifts: Array.isArray(game?.shifts)
+          ? game.shifts.map((shift, index) => ({
+              id: shift?.id || createId(),
+              shiftNumber: safeNumber(shift?.shiftNumber, index + 1),
+              gameId: shift?.gameId || game?.id || "",
+              lineup: shift?.lineup || { 1: "", 2: "", 3: "", 4: "", 5: "" },
+              score: {
+                us: safeNumber(shift?.score?.us),
+                them: safeNumber(shift?.score?.them),
+              },
+              plusMinus: safeNumber(shift?.plusMinus),
+              events: Array.isArray(shift?.events) ? shift.events : [],
+              playerStats: shift?.playerStats || {},
+              createdAt: shift?.createdAt || new Date().toISOString(),
+            }))
+          : [],
+        boxScoreEdits: game?.boxScoreEdits || {},
+        notes: game?.notes || "",
+        createdAt: game?.createdAt || new Date().toISOString(),
+      }))
+    : [];
+
   return {
-    id: season.id || createId(),
-    name: season.name || "Season",
-    players: Array.isArray(season.players) ? season.players : [],
-    games: Array.isArray(season.games) ? season.games : [],
-    currentLineup: season.currentLineup || { 1: "", 2: "", 3: "", 4: "", 5: "" },
-    createdAt: season.createdAt || new Date().toISOString(),
+    id: season?.id || createId(),
+    name: season?.name || "Season",
+    players: normalizedPlayers,
+    games: normalizedGames,
+    currentLineup: season?.currentLineup || { 1: "", 2: "", 3: "", 4: "", 5: "" },
+    createdAt: season?.createdAt || new Date().toISOString(),
   };
 }
-
 function ensureAppShape(data) {
   if (!data || !Array.isArray(data.seasons) || !data.seasons.length) {
     const firstSeason = createEmptySeason("Season 1");
@@ -1764,6 +1859,31 @@ export default function App() {
     const [selectedLogPlayerId, setSelectedLogPlayerId] = useState("");
   const [selectedProfilePlayerId, setSelectedProfilePlayerId] = useState("");
   const [profileDisplayMode, setProfileDisplayMode] = useState("perGame");
+function handleExportData() {
+  exportAppData(appData);
+}
+
+function handleImportData(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  importAppDataFromFile(file, (safeData) => {
+    setAppData(safeData);
+    setCurrentGameId(null);
+    setCurrentShift(null);
+    setEditingShiftId(null);
+    setSelectedGameId(null);
+    setBoxScoreDraft(null);
+    setSelectedLivePlayerId("");
+    setSelectedLogPlayerId("");
+    setSelectedProfilePlayerId("");
+    setSynergyFocusPlayerId("");
+    setSelectedSynergyKey("");
+    setSelectedMatrixPlayerId("");
+  });
+
+  event.target.value = "";
+}
 
   useEffect(() => {
     saveStorage(appData);
@@ -2280,7 +2400,7 @@ nextGame.boxScoreEdits = nextBoxScoreEdits;
           </div>
         </div>
 
-        <div style={styles.topBarRight}>
+                <div style={styles.topBarRight}>
           <div>
             <div style={styles.label}>Season</div>
             <select
@@ -2310,6 +2430,29 @@ nextGame.boxScoreEdits = nextBoxScoreEdits;
           <SmallButton variant="secondary" onClick={renameSeason}>
             Rename Season
           </SmallButton>
+
+          <SmallButton variant="secondary" onClick={handleExportData}>
+            Export Data
+          </SmallButton>
+
+          <label style={{ display: "inline-block" }}>
+            <input
+              type="file"
+              accept="application/json"
+              onChange={handleImportData}
+              style={{ display: "none" }}
+            />
+            <span
+              style={{
+                ...styles.buttonBase,
+                ...styles.secondaryButton,
+                display: "inline-block",
+                cursor: "pointer",
+              }}
+            >
+              Import Data
+            </span>
+          </label>
         </div>
       </div>
     );
@@ -2367,7 +2510,9 @@ nextGame.boxScoreEdits = nextBoxScoreEdits;
                   <div style={{ fontWeight: 700 }}>
                     {player.name} {player.jersey ? `#${player.jersey}` : ""}
                   </div>
-                  <div style={styles.miniText}>{player.id.slice(0, 8)}</div>
+                  <div style={styles.miniText}>
+  {typeof player.id === "string" ? player.id.slice(0, 8) : "No ID"}
+</div>
                 </div>
                 <SmallButton variant="danger" onClick={() => deletePlayer(player.id)}>
                   Delete
