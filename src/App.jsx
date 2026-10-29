@@ -30,6 +30,7 @@ const TABS = [
   "Leaderboards",
   "Synergy",
   "Growth",
+  "Position Evaluations",
   "Player Logs",
   "Player Profiles",
   "Period Averages",
@@ -273,6 +274,7 @@ function createEmptySeason(name = "Season 1") {
     name,
     players: [],
     games: [],
+    positionEvaluations: [],
     currentLineup: {
       1: "",
       2: "",
@@ -498,6 +500,7 @@ function ensureSeasonShape(season) {
     name: season?.name || "Season",
     players: normalizedPlayers,
     games: normalizedGames,
+    positionEvaluations: Array.isArray(season?.positionEvaluations) ? season.positionEvaluations : [],
     currentLineup: season?.currentLineup || { 1: "", 2: "", 3: "", 4: "", 5: "" },
     createdAt: season?.createdAt || new Date().toISOString(),
   };
@@ -1814,6 +1817,9 @@ function buildPlayerProfileData(season, playerId, playerTotals) {
 export default function App() {
   const [appData, setAppData] = useState(() => ensureAppShape(loadStorage()));
   const [activeTab, setActiveTab] = useState("Live Tracker");
+  const [evaluationGameId, setEvaluationGameId] = useState("");
+  const [evaluationPlayerId, setEvaluationPlayerId] = useState("");
+  const [evaluationPosition, setEvaluationPosition] = useState(1);
 
   const [liveOpponent, setLiveOpponent] = useState("");
   const [liveGameDate, setLiveGameDate] = useState(new Date().toISOString().slice(0, 10));
@@ -5156,6 +5162,68 @@ function renderPeriodAveragesTab() {
   );
 }
 
+
+  function renderPositionEvaluationsTab() {
+    const games = [...(activeSeason.games || [])].sort((a,b) => (a.date || "").localeCompare(b.date || ""));
+    const gameId = games.some(g => g.id === evaluationGameId) ? evaluationGameId : (games[games.length-1]?.id || "");
+    const playerId = players.some(p => p.id === evaluationPlayerId) ? evaluationPlayerId : (players[0]?.id || "");
+    const position = Number(evaluationPosition);
+    const fields = [
+      ["ballHandling", "Ball handling"],
+      ["decisions", "Decision-making"],
+      ["confidence", "Confidence"],
+      ["organization", "Offensive organization"],
+    ];
+    const evaluations = activeSeason.positionEvaluations || [];
+    const existing = evaluations.find(e => e.gameId === gameId && e.playerId === playerId && e.position === position);
+    const rating = (field) => existing?.ratings?.[field] ?? 0;
+    function updateEvaluation(patch) {
+      if (!gameId || !playerId) return;
+      updateActiveSeason(season => {
+        const old = season.positionEvaluations || [];
+        const index = old.findIndex(e => e.gameId === gameId && e.playerId === playerId && e.position === position);
+        const current = index >= 0 ? old[index] : { gameId, playerId, position, ratings: {}, notes: "" };
+        const next = { ...current, ...patch, ratings: { ...current.ratings, ...(patch.ratings || {}) } };
+        const updated = old.filter((_,i) => i !== index);
+        updated.push(next);
+        return { ...season, positionEvaluations: updated };
+      });
+    }
+    const summary = players.map(p => {
+      const entries = evaluations.filter(e => e.playerId === p.id && e.position === position);
+      const valid = entries.filter(e => fields.every(([key]) => Number(e.ratings?.[key]) >= 1 && Number(e.ratings?.[key]) <= 5));
+      const score = valid.length ? valid.reduce((sum,e) => sum + fields.reduce((s,[key]) => s + Number(e.ratings[key]),0)/4,0)/valid.length : null;
+      return { id:p.id, name:p.name, count:valid.length, score };
+    }).sort((a,b) => (b.score ?? -1) - (a.score ?? -1));
+    const selectStyle = { padding:"10px", borderRadius:8, background:"#fff", color:"#111", maxWidth:"100%", minWidth:120 };
+    return <div style={styles.contentGridSingle}>
+      <Card title="Position Evaluations" right={<span style={styles.badge}>Development tracking</span>}>
+        <p style={styles.miniText}>Rate each player after a game. A score of 1 means needs support; 3 means developing; 5 means consistently strong. These are coaching observations, not box-score statistics. An unfinished evaluation is excluded from averages.</p>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:18}}>
+          <label>Game<br/><select style={selectStyle} value={gameId} onChange={e=>setEvaluationGameId(e.target.value)}>{games.map(g=><option key={g.id} value={g.id}>{g.date} vs {g.opponent || "Opponent"}</option>)}</select></label>
+          <label>Player<br/><select style={selectStyle} value={playerId} onChange={e=>setEvaluationPlayerId(e.target.value)}>{players.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+          <label>Position<br/><select style={selectStyle} value={position} onChange={e=>setEvaluationPosition(Number(e.target.value))}>{POSITIONS.map(n=><option key={n} value={n}>{n} {n===1?"(PG)":""}</option>)}</select></label>
+        </div>
+        {!games.length || !players.length ? <p>Add a completed game and players to begin evaluations.</p> : <>
+          {fields.map(([key,label])=><div key={key} style={{marginBottom:16}}>
+            <div style={{fontWeight:700,marginBottom:6}}>{label} {rating(key) ? "— "+rating(key)+"/5" : "— not rated"}</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{[1,2,3,4,5].map(n=><SmallButton key={n} variant={rating(key)===n?"primary":"secondary"} onClick={()=>updateEvaluation({ratings:{[key]:n}})}>{n}</SmallButton>)}</div>
+          </div>)}
+          <label style={{display:"block",marginBottom:8}}>Coaching notes</label>
+          <textarea style={{width:"100%",minHeight:76,padding:10,borderRadius:8,boxSizing:"border-box"}} value={existing?.notes || ""} onChange={e=>updateEvaluation({notes:e.target.value})} placeholder="What went well? What should this player work on next?" />
+          {existing && <div style={{marginTop:10}}><SmallButton variant="danger" onClick={() => updateActiveSeason(season => ({...season,positionEvaluations:(season.positionEvaluations || []).filter(e => !(e.gameId === gameId && e.playerId === playerId && e.position === position))}))}>Clear this evaluation</SmallButton></div>}
+        </>}
+      </Card>
+      <Card title={`Position ${position} — game-by-game comparison`}>
+        <p style={styles.miniText}>Averages use only fully rated games, with equal weight for each of the four skills. For your initial PG trial, aim for 3–5 evaluations before settling on roles.</p>
+        <TableScroll><table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr><th style={{textAlign:"left",padding:8}}>Player</th><th>Rated games</th><th>Average / 5</th></tr></thead>
+          <tbody>{summary.map(p=><tr key={p.id} style={{borderTop:"1px solid #7775"}}><td style={{padding:8}}>{p.name}</td><td style={{textAlign:"center"}}>{p.count}</td><td style={{textAlign:"center"}}>{p.score===null?"—":p.score.toFixed(2)}</td></tr>)}</tbody>
+        </table></TableScroll>
+      </Card>
+    </div>;
+  }
+
    return (
     <div style={styles.app}>
       {renderTopBar()}
@@ -5168,6 +5236,7 @@ function renderPeriodAveragesTab() {
       {activeTab === "Leaderboards" && renderLeaderboardsTab()}
       {activeTab === "Synergy" && renderSynergyTab()}
       {activeTab === "Growth" && renderGrowthTab()}
+      {activeTab === "Position Evaluations" && renderPositionEvaluationsTab()}
       {activeTab === "Player Logs" && renderPlayerLogsTab()}
       {activeTab === "Player Profiles" && renderPlayerProfilesTab()}
       {activeTab === "Period Averages" && renderPeriodAveragesTab()}
