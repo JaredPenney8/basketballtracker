@@ -5264,13 +5264,14 @@ function renderPeriodAveragesTab() {
       for(const [pos,r] of Object.entries(x.stats)){
         if(!r.playerId)continue;
         for(const [field,label] of fields){
-          if(r[field]!=="" && (!/^\\d+$/.test(String(r[field])) || Number(r[field])<0))issues.push("Shift "+(i+1)+" pos "+pos+": invalid "+label);
+          if(r[field]!=="" && (!/^\d+$/.test(String(r[field])) || Number(r[field])<0))issues.push("Shift "+(i+1)+" pos "+pos+": invalid "+label);
         }
         if(r.oreb!==""&&r.dreb!==""&&r.treb!==""&&Number(r.oreb)+Number(r.dreb)!==Number(r.treb))issues.push("Shift "+(i+1)+" pos "+pos+": TREB must equal OREB + DREB");
       }
-      if(x.us===""||x.them===""||!/^\\d+$/.test(x.us)||!/^\\d+$/.test(x.them))issues.push("Shift "+(i+1)+": enter both shift scores");
+      if(x.us===""||x.them===""||!/^\d+$/.test(x.us)||!/^\d+$/.test(x.them))issues.push("Shift "+(i+1)+": enter both shift scores");
       const playerPts=Object.values(x.stats).reduce((sum,r)=>sum+Number(r.points||0),0);
       if(x.us!==""&&playerPts>Number(x.us))issues.push("Shift "+(i+1)+": player points exceed shift score");
+      if(x.us!==""&&Object.values(x.stats).every(r=>r.points!=="")&&playerPts!==Number(x.us))issues.push("Shift "+(i+1)+": player totals do not reconcile to team points");
       const opp=Object.values(x.stats).reduce((sum,r)=>sum+Number(r.oppPts||0),0);
       if(x.them!==""&&opp>Number(x.them))issues.push("Shift "+(i+1)+": assigned opponent points exceed opponent shift score");
       return issues;
@@ -5278,7 +5279,7 @@ function renderPeriodAveragesTab() {
     const issues=current?current.shifts.flatMap(issuesForShift):[];
     function commitDraft() {
       if(!current||!game||issues.length){window.alert("Resolve validation issues before saving.");return;}
-      if((game.shifts||[]).length>0&&!window.confirm("This game already contains shifts. Replace them with your reviewed paper data?"))return;
+      if((game.shifts||[]).length>0){window.alert("This game already has recorded shifts. Use an empty game for paper import; existing play-by-play will not be overwritten.");return;}
       const data=current.shifts.map((x,i)=>{
         const original=game.shifts?.[i];
         const stats={};
@@ -5295,7 +5296,7 @@ function renderPeriodAveragesTab() {
         return {...(original||{}),id:original?.id||createId(),shiftNumber:i+1,gameId:game.id,lineup:Object.fromEntries(Object.entries(x.stats).map(([pos,r])=>[pos,r.playerId])),score:{us:Number(x.us),them:Number(x.them)},plusMinus:Number(x.us)-Number(x.them),playerStats:stats,events:[],source:"paper-manual",defensiveAssignmentPoints:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,Number(r.oppPts||0)])),paperAttempts:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,{fga:Number(r.fga||0),fta:Number(r.fta||0)}])),createdAt:original?.createdAt||new Date().toISOString()};
       });
       const sums=data.reduce((acc,x)=>({us:acc.us+x.score.us,them:acc.them+x.score.them}),{us:0,them:0});
-      const merged={...game,shifts:data,finalScore:sums,source:"paper-manual"};
+      const merged={...game,shifts:data,finalScore:sums,source:"paper-manual",paperImportAudit:{importedAt:new Date().toISOString(),shiftCount:data.length}};
       const base=aggregateGameBaseBoxScoreFromShifts(merged,players.map(p=>p.id));
       const boxScoreEdits={};
       players.forEach(p=>{
