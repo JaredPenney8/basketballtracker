@@ -1831,6 +1831,8 @@ export default function App() {
   const [paperDraft, setPaperDraft] = useState(null);
   const [paperGameId, setPaperGameId] = useState("");
   const [paperShiftNumber, setPaperShiftNumber] = useState(1);
+  const [paperPhotos, setPaperPhotos] = useState([]);
+  const [paperPhotoPage, setPaperPhotoPage] = useState(0);
 
   const [rankingsSort, setRankingsSort] = useState({ key: "points", dir: "desc" });
   const [leaderboardMode, setLeaderboardMode] = useState("totals");
@@ -5180,6 +5182,18 @@ function renderPeriodAveragesTab() {
         return {lineup,stats,us:saved ? String(saved.score?.us ?? "") : "",them:saved ? String(saved.score?.them ?? "") : ""};
       })};
     }
+    async function addPaperPhotos(files) {
+      const candidates = Array.from(files || []).filter(f => f.type.startsWith("image/")).slice(0,2);
+      if(!candidates.length)return;
+      const next = await Promise.all(candidates.map(file => new Promise((resolve,reject)=>{
+        const reader=new FileReader();
+        reader.onload=()=>resolve({name:file.name,src:String(reader.result)});
+        reader.onerror=()=>reject(new Error("Could not read "+file.name));
+        reader.readAsDataURL(file);
+      })));
+      setPaperPhotos(prev=>[...prev,...next].slice(0,2));
+      setPaperPhotoPage(0);
+    }
     function setEntry(next) {
       setPaperDraft(prev=>({...prev,shifts:prev.shifts.map((x,i)=>i===paperShiftNumber-1?next:x)}));
     }
@@ -5244,6 +5258,15 @@ function renderPeriodAveragesTab() {
             <SmallButton variant="primary" onClick={()=>setPaperDraft(createPaperDraft(game))}>{current?"Reset draft":"Begin manual entry"}</SmallButton>
           </div>
           {current&&<>
+            <section style={{padding:12,border:"1px solid #aaa",borderRadius:8,marginTop:16}}>
+              <h3 style={{margin:"0 0 8px"}}>Photo-assisted review</h3>
+              <p style={styles.miniText}>Attach up to two page photos. Photos stay in this browser session for side-by-side transcription; handwritten numbers are not automatically recognized yet. Review every field manually.</p>
+              <input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addPaperPhotos(e.target.files).catch(err=>window.alert(err.message));e.target.value="";}} />
+              {!!paperPhotos.length&&<div style={{marginTop:12}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>{paperPhotos.map((p,i)=><SmallButton key={i} variant={paperPhotoPage===i?"primary":"secondary"} onClick={()=>setPaperPhotoPage(i)}>{p.name||"Page "+(i+1)}</SmallButton>)}<SmallButton variant="danger" onClick={()=>{setPaperPhotos([]);setPaperPhotoPage(0);}}>Remove photos</SmallButton></div>
+                <img alt={"Paper stats "+(paperPhotoPage+1)} src={paperPhotos[paperPhotoPage]?.src} style={{display:"block",width:"100%",maxHeight:650,objectFit:"contain",marginTop:10,border:"1px solid #777"}}/>
+              </div>}
+            </section>
             <div style={{display:"flex",gap:7,flexWrap:"wrap",margin:"16px 0"}}>{current.shifts.map((x,i)=><SmallButton key={i} variant={paperShiftNumber===i+1?"primary":"secondary"} onClick={()=>setPaperShiftNumber(i+1)}>Shift {i+1}</SmallButton>)}</div>
             <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
               {["us","them"].map(k=><label key={k}>{k==="us"?"SLAM points":"Opponent points"} <input type="number" min="0" value={entry[k]} style={{width:65,padding:8}} onChange={e=>setEntry({...entry,[k]:e.target.value})}/></label>)}
