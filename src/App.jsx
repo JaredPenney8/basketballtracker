@@ -5212,12 +5212,12 @@ function renderPeriodAveragesTab() {
           for(const [key] of fields)if(key!=="fga"&&key!=="fta"&&key!=="oppPts")ps[key]=Number(r[key]||0);
           ps.shifts=1;
           ps.plusMinus=Number(x.us)-Number(x.them);
-          ps.twoPA=Number(r.fga||0);
-          ps.ftMiss=Number(r.fta||0);
+          ps.fga=Number(r.fga||0);
+          ps.fta=Number(r.fta||0);
           ps.trackedShiftCounts={...EMPTY_TRACKED_COUNTS};
           stats[r.playerId]=ps;
         });
-        return {...(original||{}),id:original?.id||createId(),shiftNumber:i+1,gameId:game.id,lineup:Object.fromEntries(Object.entries(x.stats).map(([pos,r])=>[pos,r.playerId])),score:{us:Number(x.us),them:Number(x.them)},plusMinus:Number(x.us)-Number(x.them),playerStats:stats,events:[],source:"paper-manual",defensiveAssignmentPoints:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,Number(r.oppPts||0)])),createdAt:original?.createdAt||new Date().toISOString()};
+        return {...(original||{}),id:original?.id||createId(),shiftNumber:i+1,gameId:game.id,lineup:Object.fromEntries(Object.entries(x.stats).map(([pos,r])=>[pos,r.playerId])),score:{us:Number(x.us),them:Number(x.them)},plusMinus:Number(x.us)-Number(x.them),playerStats:stats,events:[],source:"paper-manual",defensiveAssignmentPoints:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,Number(r.oppPts||0)])),paperAttempts:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,{fga:Number(r.fga||0),fta:Number(r.fta||0)}])),createdAt:original?.createdAt||new Date().toISOString()};
       });
       const sums=data.reduce((acc,x)=>({us:acc.us+x.score.us,them:acc.them+x.score.them}),{us:0,them:0});
       const merged={...game,shifts:data,finalScore:sums,source:"paper-manual"};
