@@ -5179,7 +5179,7 @@ function renderPeriodAveragesTab() {
           const id=lineup[pos] || "";
           stats[pos]={playerId:id,points:"",fga:"",fta:"",oreb:"",dreb:"",treb:"",ast:"",stl:"",to:"",oppPts:""};
         });
-        return {lineup,stats,us:saved ? String(saved.score?.us ?? "") : "",them:saved ? String(saved.score?.them ?? "") : ""};
+        return {lineup,stats,us:saved ? String(saved.score?.us ?? "") : "",them:saved ? String(saved.score?.them ?? "") : "",unattributedPts:"0"};
       })};
     }
     async function addPaperPhotos(files) {
@@ -5264,6 +5264,7 @@ function renderPeriodAveragesTab() {
       for(const [pos,r] of Object.entries(x.stats)){
         if(!r.playerId)continue;
         for(const [field,label] of fields){
+          if(r[field]==="")issues.push("Shift "+(i+1)+" pos "+pos+": "+label+" is blank. Enter 0 if none recorded");
           if(r[field]!=="" && (!/^\d+$/.test(String(r[field])) || Number(r[field])<0))issues.push("Shift "+(i+1)+" pos "+pos+": invalid "+label);
         }
         if(r.oreb!==""&&r.dreb!==""&&r.treb!==""&&Number(r.oreb)+Number(r.dreb)!==Number(r.treb))issues.push("Shift "+(i+1)+" pos "+pos+": TREB must equal OREB + DREB");
@@ -5271,7 +5272,8 @@ function renderPeriodAveragesTab() {
       if(x.us===""||x.them===""||!/^\d+$/.test(x.us)||!/^\d+$/.test(x.them))issues.push("Shift "+(i+1)+": enter both shift scores");
       const playerPts=Object.values(x.stats).reduce((sum,r)=>sum+Number(r.points||0),0);
       if(x.us!==""&&playerPts>Number(x.us))issues.push("Shift "+(i+1)+": player points exceed shift score");
-      if(x.us!==""&&Object.values(x.stats).every(r=>r.points!=="")&&playerPts!==Number(x.us))issues.push("Shift "+(i+1)+": player totals do not reconcile to team points");
+      if(!/^\d+$/.test(String(x.unattributedPts??"")))issues.push("Shift "+(i+1)+": enter unattributed team points, or 0");
+      if(x.us!==""&&Object.values(x.stats).every(r=>r.points!=="")&&playerPts+Number(x.unattributedPts||0)!==Number(x.us))issues.push("Shift "+(i+1)+": player points + unattributed points must equal team shift score");
       const opp=Object.values(x.stats).reduce((sum,r)=>sum+Number(r.oppPts||0),0);
       if(x.them!==""&&opp>Number(x.them))issues.push("Shift "+(i+1)+": assigned opponent points exceed opponent shift score");
       return issues;
@@ -5293,7 +5295,7 @@ function renderPeriodAveragesTab() {
           ps.trackedShiftCounts={...EMPTY_TRACKED_COUNTS};
           stats[r.playerId]=ps;
         });
-        return {...(original||{}),id:original?.id||createId(),shiftNumber:i+1,gameId:game.id,lineup:Object.fromEntries(Object.entries(x.stats).map(([pos,r])=>[pos,r.playerId])),score:{us:Number(x.us),them:Number(x.them)},plusMinus:Number(x.us)-Number(x.them),playerStats:stats,events:[],source:"paper-manual",defensiveAssignmentPoints:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,Number(r.oppPts||0)])),paperAttempts:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,{fga:Number(r.fga||0),fta:Number(r.fta||0)}])),createdAt:original?.createdAt||new Date().toISOString()};
+        return {...(original||{}),id:original?.id||createId(),shiftNumber:i+1,gameId:game.id,lineup:Object.fromEntries(Object.entries(x.stats).map(([pos,r])=>[pos,r.playerId])),score:{us:Number(x.us),them:Number(x.them)},plusMinus:Number(x.us)-Number(x.them),playerStats:stats,events:[],source:"paper-manual",unattributedTeamPoints:Number(x.unattributedPts||0),defensiveAssignmentPoints:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,Number(r.oppPts||0)])),paperAttempts:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,{fga:Number(r.fga||0),fta:Number(r.fta||0)}])),createdAt:original?.createdAt||new Date().toISOString()};
       });
       const sums=data.reduce((acc,x)=>({us:acc.us+x.score.us,them:acc.them+x.score.them}),{us:0,them:0});
       const merged={...game,shifts:data,finalScore:sums,source:"paper-manual",paperImportAudit:{importedAt:new Date().toISOString(),shiftCount:data.length}};
@@ -5336,6 +5338,7 @@ function renderPeriodAveragesTab() {
             <div style={{display:"flex",gap:7,flexWrap:"wrap",margin:"16px 0"}}>{current.shifts.map((x,i)=><SmallButton key={i} variant={paperShiftNumber===i+1?"primary":"secondary"} onClick={()=>setPaperShiftNumber(i+1)}>Shift {i+1}</SmallButton>)}</div>
             <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
               {["us","them"].map(k=><label key={k}>{k==="us"?"SLAM points":"Opponent points"} <input type="number" min="0" value={entry[k]} style={{width:65,padding:8}} onChange={e=>setEntry({...entry,[k]:e.target.value})}/></label>)}
+              <label>Unattributed team points <input type="number" min="0" value={entry.unattributedPts} style={{width:65,padding:8}} onChange={e=>setEntry({...entry,unattributedPts:e.target.value})}/></label>
               <strong>Shift +/-: {entry.us!==""&&entry.them!==""?Number(entry.us)-Number(entry.them):"—"}</strong>
             </div>
             <TableScroll><table style={{borderCollapse:"collapse",minWidth:1020,width:"100%"}}><thead><tr>{["Position","Player",...fields.map(([,label])=>label)].map(h=><th key={h} style={{padding:7,border:"1px solid #777"}}>{h}</th>)}</tr></thead><tbody>{[1,2,3,4,5].map(pos=>{
