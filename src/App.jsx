@@ -26,6 +26,7 @@ const TABS = [
   "Live Tracker",
   "Saved Shifts",
   "Paper Game Sheets",
+  "Manual Paper Entry",
   "Games",
   "Rankings",
   "Leaderboards",
@@ -1827,6 +1828,9 @@ export default function App() {
 
   const [selectedGameId, setSelectedGameId] = useState(null);
   const [boxScoreDraft, setBoxScoreDraft] = useState(null);
+  const [paperDraft, setPaperDraft] = useState(null);
+  const [paperGameId, setPaperGameId] = useState("");
+  const [paperShiftNumber, setPaperShiftNumber] = useState(1);
 
   const [rankingsSort, setRankingsSort] = useState({ key: "points", dir: "desc" });
   const [leaderboardMode, setLeaderboardMode] = useState("totals");
@@ -5158,6 +5162,106 @@ function renderPeriodAveragesTab() {
 }
 
 
+
+  function renderManualPaperEntryTab() {
+    const games = activeSeason.games || [];
+    const game = games.find(g => g.id === paperGameId) || games.at(-1);
+    const current = paperDraft?.gameId === game?.id ? paperDraft : null;
+    const entry = current?.shifts?.[paperShiftNumber - 1];
+    const fields = [["points","PTS"],["fga","FGA"],["fta","FTA"],["oreb","OREB"],["dreb","DREB"],["treb","TREB"],["ast","AST"],["stl","STL"],["to","TO"],["oppPts","Opp PTS"]];
+    function createPaperDraft(g) {
+      return {gameId:g.id,shifts:Array.from({length:8},(_,i)=>{
+        const saved=g.shifts?.[i],lineup={...(saved?.lineup || {})};
+        const stats={};
+        [1,2,3,4,5].forEach(pos=>{
+          const id=lineup[pos] || "";
+          stats[pos]={playerId:id,points:"",fga:"",fta:"",oreb:"",dreb:"",treb:"",ast:"",stl:"",to:"",oppPts:""};
+        });
+        return {lineup,stats,us:saved ? String(saved.score?.us ?? "") : "",them:saved ? String(saved.score?.them ?? "") : ""};
+      })};
+    }
+    function setEntry(next) {
+      setPaperDraft(prev=>({...prev,shifts:prev.shifts.map((x,i)=>i===paperShiftNumber-1?next:x)}));
+    }
+    function issuesForShift(x,i) {
+      if(!x)return [];
+      const issues=[],ids=Object.values(x.stats).map(r=>r.playerId).filter(Boolean);
+      if(ids.length!==5||new Set(ids).size!==5)issues.push("Shift "+(i+1)+": select five different players");
+      for(const [pos,r] of Object.entries(x.stats)){
+        if(!r.playerId)continue;
+        for(const [field,label] of fields){
+          if(r[field]!=="" && (!/^\\d+$/.test(String(r[field])) || Number(r[field])<0))issues.push("Shift "+(i+1)+" pos "+pos+": invalid "+label);
+        }
+        if(r.oreb!==""&&r.dreb!==""&&r.treb!==""&&Number(r.oreb)+Number(r.dreb)!==Number(r.treb))issues.push("Shift "+(i+1)+" pos "+pos+": TREB must equal OREB + DREB");
+      }
+      if(x.us===""||x.them===""||!/^\\d+$/.test(x.us)||!/^\\d+$/.test(x.them))issues.push("Shift "+(i+1)+": enter both shift scores");
+      const playerPts=Object.values(x.stats).reduce((sum,r)=>sum+Number(r.points||0),0);
+      if(x.us!==""&&playerPts>Number(x.us))issues.push("Shift "+(i+1)+": player points exceed shift score");
+      const opp=Object.values(x.stats).reduce((sum,r)=>sum+Number(r.oppPts||0),0);
+      if(x.them!==""&&opp>Number(x.them))issues.push("Shift "+(i+1)+": assigned opponent points exceed opponent shift score");
+      return issues;
+    }
+    const issues=current?current.shifts.flatMap(issuesForShift):[];
+    function commitDraft() {
+      if(!current||!game||issues.length){window.alert("Resolve validation issues before saving.");return;}
+      const data=current.shifts.map((x,i)=>{
+        const original=game.shifts?.[i];
+        const stats={};
+        Object.values(x.stats).forEach(r=>{
+          const ps=createBlankPlayerStats();
+          for(const [key] of fields)if(key!=="fga"&&key!=="fta"&&key!=="oppPts")ps[key]=Number(r[key]||0);
+          ps.shifts=1;
+          ps.plusMinus=Number(x.us)-Number(x.them);
+          ps.twoPA=Number(r.fga||0);
+          ps.ftMiss=Number(r.fta||0);
+          ps.trackedShiftCounts={...EMPTY_TRACKED_COUNTS};
+          stats[r.playerId]=ps;
+        });
+        return {...(original||{}),id:original?.id||createId(),shiftNumber:i+1,gameId:game.id,lineup:Object.fromEntries(Object.entries(x.stats).map(([pos,r])=>[pos,r.playerId])),score:{us:Number(x.us),them:Number(x.them)},plusMinus:Number(x.us)-Number(x.them),playerStats:stats,events:[],source:"paper-manual",defensiveAssignmentPoints:Object.fromEntries(Object.values(x.stats).map(r=>[r.playerId,Number(r.oppPts||0)])),createdAt:original?.createdAt||new Date().toISOString()};
+      });
+      const sums=data.reduce((acc,x)=>({us:acc.us+x.score.us,them:acc.them+x.score.them}),{us:0,them:0});
+      const merged={...game,shifts:data,finalScore:sums,source:"paper-manual"};
+      const base=aggregateGameBaseBoxScoreFromShifts(merged,players.map(p=>p.id));
+      const boxScoreEdits={};
+      players.forEach(p=>{
+        const b=base[p.id]||createBlankPlayerStats();
+        boxScoreEdits[p.id]=createBlankBoxScoreForPlayer(game.tracked||DEFAULT_TRACKED);
+        for(const key of ["points","oreb","dreb","treb","ast","stl","to","plusMinus","shifts"]){
+          boxScoreEdits[p.id][key]={value:Number(b[key]||0),tracked:true};
+        }
+      });
+      merged.boxScoreEdits=boxScoreEdits;
+      updateActiveSeason(season=>({...season,games:season.games.map(g=>g.id===game.id?merged:g)}));
+      setPaperDraft(null);
+      window.alert("Eight shifts saved. Review game and season totals before relying on them.");
+    }
+    return <div style={styles.contentGridSingle}>
+      <Card title="Manual paper game entry">
+        <p>Enter the final numbers from your paper sheet. This writes all eight shifts at once after validation. <strong>Important:</strong> Saving replaces this game's existing eight shifts and clears their original play-by-play events. Export a backup before replacing a tracked game.</p>
+        {!games.length?<p>Start a game first, then return here to enter the paper sheet.</p>:<>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <select style={styles.select} value={game?.id||""} onChange={e=>{setPaperGameId(e.target.value);setPaperDraft(null);}}>{games.map(g=><option key={g.id} value={g.id}>{g.date} vs {g.opponent}</option>)}</select>
+            <SmallButton variant="primary" onClick={()=>setPaperDraft(createPaperDraft(game))}>{current?"Reset draft":"Begin manual entry"}</SmallButton>
+          </div>
+          {current&&<>
+            <div style={{display:"flex",gap:7,flexWrap:"wrap",margin:"16px 0"}}>{current.shifts.map((x,i)=><SmallButton key={i} variant={paperShiftNumber===i+1?"primary":"secondary"} onClick={()=>setPaperShiftNumber(i+1)}>Shift {i+1}</SmallButton>)}</div>
+            <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
+              {["us","them"].map(k=><label key={k}>{k==="us"?"SLAM points":"Opponent points"} <input type="number" min="0" value={entry[k]} style={{width:65,padding:8}} onChange={e=>setEntry({...entry,[k]:e.target.value})}/></label>)}
+              <strong>Shift +/-: {entry.us!==""&&entry.them!==""?Number(entry.us)-Number(entry.them):"—"}</strong>
+            </div>
+            <TableScroll><table style={{borderCollapse:"collapse",minWidth:1020,width:"100%"}}><thead><tr>{["Position","Player",...fields.map(([,label])=>label)].map(h=><th key={h} style={{padding:7,border:"1px solid #777"}}>{h}</th>)}</tr></thead><tbody>{[1,2,3,4,5].map(pos=>{
+              const row=entry.stats[pos];
+              return <tr key={pos}><td style={{padding:5}}>{pos}</td><td><select value={row.playerId} onChange={e=>setEntry({...entry,stats:{...entry.stats,[pos]:{...row,playerId:e.target.value}}})}><option value="">Select</option>{players.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></td>{fields.map(([field])=><td key={field}><input aria-label={field+" position "+pos} inputMode="numeric" style={{width:46,padding:4}} value={row[field]} onChange={e=>setEntry({...entry,stats:{...entry.stats,[pos]:{...row,[field]:e.target.value}}})}/></td>)}</tr>;
+            })}</tbody></table></TableScroll>
+            <p style={styles.miniText}>FGA and FTA are attempt counts, not makes. Opp PTS is assigned defensive points. No shooting percentage is inferred.</p>
+            <div style={{marginTop:16}}><strong>Validation: {issues.length===0?"No blocking issues":issues.length+" issues"}</strong>{issues.slice(0,15).map((msg,i)=><div key={i} style={{color:"#b45309"}}>{msg}</div>)}</div>
+            <div style={{marginTop:12}}><SmallButton variant="primary" disabled={issues.length>0} onClick={()=>{if(game.shifts?.length&&!window.confirm("Replace existing recorded shifts and their play-by-play events?"))return;commitDraft();}}>Confirm and save all eight shifts</SmallButton></div>
+          </>}
+        </>}
+      </Card>
+    </div>;
+  }
+
   function renderPaperSheetsTab() {
     const game = (activeSeason.games || []).find(g => g.id === selectedGameId) || currentGame || (activeSeason.games || []).at(-1);
     const shifts = Array.from({length:8},(_,i)=>game?.shifts?.[i] || null);
@@ -5213,6 +5317,7 @@ function renderPeriodAveragesTab() {
       {activeTab === "Live Tracker" && renderLiveTab()}
       {activeTab === "Saved Shifts" && renderSavedShiftsTab()}
       {activeTab === "Paper Game Sheets" && renderPaperSheetsTab()}
+      {activeTab === "Manual Paper Entry" && renderManualPaperEntryTab()}
       {activeTab === "Games" && renderGamesTab()}
       {activeTab === "Rankings" && renderRankingsTab()}
       {activeTab === "Leaderboards" && renderLeaderboardsTab()}
