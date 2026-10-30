@@ -5197,6 +5197,66 @@ function renderPeriodAveragesTab() {
     function setEntry(next) {
       setPaperDraft(prev=>({...prev,shifts:prev.shifts.map((x,i)=>i===paperShiftNumber-1?next:x)}));
     }
+
+    function downloadCsvTemplate() {
+      const header=["shift","position","player","us","them","pts","fga","fta","oreb","dreb","treb","ast","stl","to","opp_pts"];
+      const rows=[header.join(",")];
+      for(let i=0;i<8;i++)for(let pos=1;pos<=5;pos++){
+        const id=game?.shifts?.[i]?.lineup?.[pos];
+        const player=players.find(p=>p.id===id);
+        const name=(player?.name||"").replace(/"/g,'""');
+        rows.push([i+1,pos,'"'+name+'"',"","","","","","","","","","","",""].join(","));
+      }
+      const blob=new Blob([rows.join("\r\n")],{type:"text/csv;charset=utf-8"});
+      const url=URL.createObjectURL(blob),a=document.createElement("a");
+      a.href=url;a.download="courtside-paper-game-"+(game?.id||"blank")+".csv";a.click();URL.revokeObjectURL(url);
+    }
+    // CSV parser handles quoted names, commas and CRLF rather than splitting on commas.
+    function parseCsv(source) {
+      const rows=[];let row=[],cell="",quoted=false;
+      for(let i=0;i<source.length;i++){
+        const c=source[i];
+        if(c==='"'&&quoted&&source[i+1]==='"'){cell+='"';i++;continue;}
+        if(c==='"'){quoted=!quoted;continue;}
+        if(c===","&&!quoted){row.push(cell);cell="";continue;}
+        if((c==="\n"||c==="\r")&&!quoted){if(c==="\r"&&source[i+1]==="\n")i++;row.push(cell);if(row.some(v=>v.trim()))rows.push(row);row=[];cell="";continue;}
+        cell+=c;
+      }
+      if(quoted)throw Error("Unclosed CSV quotation mark");
+      row.push(cell);if(row.some(v=>v.trim()))rows.push(row);
+      return rows;
+    }
+    async function loadCsvFile(file) {
+      if(!game||!file)return;
+      try{
+        const text=await file.text();
+        const rows=parseCsv(text.replace(/^\uFEFF/,""));
+        const expected=["shift","position","player","us","them","pts","fga","fta","oreb","dreb","treb","ast","stl","to","opp_pts"];
+        if(rows[0]?.map(x=>x.trim().toLowerCase()).join("|")!==expected.join("|"))throw Error("Incorrect CSV headers. Download the Courtside template.");
+        if(rows.length!==41)throw Error("Expected exactly 40 player rows (eight shifts times five positions).");
+        const draft=createPaperDraft(game);
+        const seen=new Set();
+        for(const raw of rows.slice(1)){
+          if(raw.length!==expected.length)throw Error("Incorrect field count in a CSV row.");
+          const [shiftStr,posStr,name,us,them,...values]=raw.map(v=>v.trim());
+          const shift=Number(shiftStr),pos=Number(posStr),key=shift+":"+pos;
+          if(!Number.isInteger(shift)||shift<1||shift>8||!Number.isInteger(pos)||pos<1||pos>5||seen.has(key))throw Error("Invalid or duplicate shift/position: "+key);
+          seen.add(key);
+          const matches=players.filter(p=>p.name.toLowerCase()===name.toLowerCase());
+          if(matches.length!==1)throw Error("Player missing or ambiguous: "+name+" (shift "+shift+")");
+          const target=draft.shifts[shift-1],r=target.stats[pos];
+          if(target.us!==""&&us!==""&&target.us!==us)throw Error("Conflicting US scores in shift "+shift);
+          if(target.them!==""&&them!==""&&target.them!==them)throw Error("Conflicting opponent scores in shift "+shift);
+          if(us!=="")target.us=us;
+          if(them!=="")target.them=them;
+          target.stats[pos]={...r,playerId:matches[0].id,
+            points:values[0],fga:values[1],fta:values[2],oreb:values[3],dreb:values[4],treb:values[5],ast:values[6],stl:values[7],to:values[8],oppPts:values[9]};
+        }
+        if(seen.size!==40)throw Error("Missing one or more shift-position rows");
+        setPaperDraft(draft);setPaperShiftNumber(1);
+        window.alert("CSV loaded into a review draft. Check every shift before saving.");
+      }catch(error){window.alert("CSV import failed: "+error.message);}
+    }
     function issuesForShift(x,i) {
       if(!x)return [];
       const issues=[],ids=Object.values(x.stats).map(r=>r.playerId).filter(Boolean);
@@ -5218,6 +5278,7 @@ function renderPeriodAveragesTab() {
     const issues=current?current.shifts.flatMap(issuesForShift):[];
     function commitDraft() {
       if(!current||!game||issues.length){window.alert("Resolve validation issues before saving.");return;}
+      if((game.shifts||[]).length>0&&!window.confirm("This game already contains shifts. Replace them with your reviewed paper data?"))return;
       const data=current.shifts.map((x,i)=>{
         const original=game.shifts?.[i];
         const stats={};
@@ -5257,6 +5318,10 @@ function renderPeriodAveragesTab() {
             <select style={styles.select} value={game?.id||""} onChange={e=>{setPaperGameId(e.target.value);setPaperDraft(null);}}>{games.map(g=><option key={g.id} value={g.id}>{g.date} vs {g.opponent}</option>)}</select>
             <SmallButton variant="primary" onClick={()=>setPaperDraft(createPaperDraft(game))}>{current?"Reset draft":"Begin manual entry"}</SmallButton>
           </div>
+          <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <SmallButton onClick={downloadCsvTemplate}>Download CSV template</SmallButton>
+            <label>Import filled CSV <input type="file" accept=".csv,text/csv" onChange={e=>{loadCsvFile(e.target.files?.[0]);e.target.value="";}}/></label>
+          </div>
           {current&&<>
             <section style={{padding:12,border:"1px solid #aaa",borderRadius:8,marginTop:16}}>
               <h3 style={{margin:"0 0 8px"}}>Photo-assisted review</h3>
@@ -5278,7 +5343,7 @@ function renderPeriodAveragesTab() {
             })}</tbody></table></TableScroll>
             <p style={styles.miniText}>FGA and FTA are attempt counts, not makes. Opp PTS is assigned defensive points. No shooting percentage is inferred.</p>
             <div style={{marginTop:16}}><strong>Validation: {issues.length===0?"No blocking issues":issues.length+" issues"}</strong>{issues.slice(0,15).map((msg,i)=><div key={i} style={{color:"#b45309"}}>{msg}</div>)}</div>
-            <div style={{marginTop:12}}><SmallButton variant="primary" disabled={issues.length>0} onClick={()=>{if(game.shifts?.length&&!window.confirm("Replace existing recorded shifts and their play-by-play events?"))return;commitDraft();}}>Confirm and save all eight shifts</SmallButton></div>
+            <div style={{marginTop:12}}><SmallButton variant="primary" disabled={issues.length>0} onClick={commitDraft}>Confirm and save all eight shifts</SmallButton></div>
           </>}
         </>}
       </Card>
