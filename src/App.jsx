@@ -25,6 +25,7 @@ const STORAGE_KEY = "youth_basketball_tracker_v2_single_file";
 const TABS = [
   "Live Tracker",
   "Saved Shifts",
+  "Paper Game Sheets",
   "Games",
   "Rankings",
   "Leaderboards",
@@ -5156,6 +5157,54 @@ function renderPeriodAveragesTab() {
   );
 }
 
+
+  function renderPaperSheetsTab() {
+    const game = (activeSeason.games || []).find(g => g.id === selectedGameId) || currentGame || (activeSeason.games || []).at(-1);
+    const shifts = Array.from({length:8},(_,i)=>game?.shifts?.[i] || null);
+    const fields = ["PTS","FGA","FTA","OREB","DREB","TREB","AST","STL","TO","Opp PTS"];
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+    function printSheets(prefilled) {
+      const rows = shifts.map((shift,i)=>{
+        const lineup = shift?.lineup || {};
+        const playerRows = [1,2,3,4,5].map(pos=>{
+          const name = prefilled ? playersById[lineup[pos]]?.name || "" : "";
+          return "<tr><td>"+pos+"</td><td class='name'>"+escapeHtml(name)+"</td><td class='tally'></td>"+fields.map(()=>"<td></td>").join("")+"</tr>";
+        }).join("");
+        return "<section class='shift'><div class='shifthead'>SHIFT "+(i+1)+" <span>US ______ OPP ______ &nbsp; RUNNING US ______ OPP ______</span></div><table><thead><tr>"+["Pos","Player","Tallies / notes",...fields].map(f=>"<th>"+f+"</th>").join("")+"</tr></thead><tbody>"+playerRows+"</tbody></table><small>Unknown opponent points ______ &nbsp; Substitutions / corrections __________________________________</small></section>";
+      });
+      const header=(page)=>"<header><h2>COURTSIDE · GAME STAT SHEET</h2><p>PAGE "+page+" OF 2 · SHIFTS "+(page===1?"1–4":"5–8")+"</p><p>Team __________________ Opponent "+escapeHtml(prefilled ? game?.opponent : "")+" __________ Date "+escapeHtml(prefilled ? game?.date : "")+" __________</p><p>Game ID "+escapeHtml(prefilled ? game?.id : "")+" &nbsp;·&nbsp; One final number per box; use tallies/notes during play.</p></header>";
+      const html="<html><head><title>Courtside Paper Sheets</title><style>@page{size:letter landscape;margin:9mm}body{font-family:Arial,sans-serif;color:#111;margin:0}header{font-size:11px;margin-bottom:8px}h2{font-size:19px;margin:0}header p{margin:4px 0}.shift{height:23%;break-inside:avoid;margin:0 0 8px}.shifthead{background:#ddd;padding:4px;font-weight:bold;font-size:12px}.shifthead span{float:right;font-weight:normal}table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:9px}td,th{border:1px solid #555;padding:3px;text-align:center;height:16px}th{background:#eee}th:nth-child(2){width:13%}th:nth-child(3){width:16%}td.name{text-align:left}small{font-size:9px}.page{break-after:page}.page:last-child{break-after:auto}footer{font-size:10px;margin-top:4px}</style></head><body><div class='page'>"+header(1)+rows.slice(0,4).join("")+"</div><div class='page'>"+header(2)+rows.slice(4,8).join("")+"<footer>FINAL SCORE US ______ OPP ______ · TREB = OREB + DREB · Plus/minus calculated from shift scores. Blank = unconfirmed, 0 = recorded none.</footer></div></body></html>";
+      const tab=window.open("","_blank");
+      if(!tab){window.alert("Allow pop-ups to print the sheet.");return;}
+      tab.document.open();tab.document.write(html);tab.document.close();tab.focus();tab.print();
+    }
+    const audit = (game?.shifts || []).map((shift,i)=>{
+      const ids=Object.values(shift.lineup || {}).filter(Boolean);
+      const us=Number(shift.score?.us || 0),them=Number(shift.score?.them || 0);
+      return {number:i+1,players:ids.length,distinct:new Set(ids).size===ids.length,scoreValid:Number.isFinite(us)&&Number.isFinite(them)&&us>=0&&them>=0,pmValid:Number(shift.plusMinus)===us-them};
+    });
+    const summed=(game?.shifts || []).reduce((a,x)=>({us:a.us+Number(x.score?.us || 0),them:a.them+Number(x.score?.them || 0)}),{us:0,them:0});
+    const gameScoreMatches=!!game && summed.us===Number(game.finalScore?.us) && summed.them===Number(game.finalScore?.them);
+    return <div style={styles.contentGridSingle}>
+      <Card title="Paper game sheets">
+        <p>Print two landscape letter pages with four shifts per page. Both versions retain all ten requested stats plus shift and running scores. Blank master sheets contain no player names.</p>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <SmallButton variant="primary" onClick={()=>printSheets(false)}>Print blank master</SmallButton>
+          <SmallButton onClick={()=>printSheets(true)} disabled={!game}>Print from selected game shifts</SmallButton>
+        </div>
+        <p style={styles.miniText}>Prefilled printing uses saved shifts from the selected game. Any unrecorded shifts stay blank. Printing does not modify game data.</p>
+      </Card>
+      <Card title="Shift score audit">
+        {!game ? <p>No game selected. Start a game to audit its saved shifts.</p> : <>
+          <p>{game.date} vs {game.opponent || "Opponent"} · {audit.length} saved shifts</p>
+          <p>Shift-score total: {summed.us}–{summed.them}. Game total: {game.finalScore?.us ?? 0}–{game.finalScore?.them ?? 0}. <strong>{gameScoreMatches?"Scores reconcile":"Scores need review"}</strong></p>
+          {audit.map(a=><p key={a.number}>Shift {a.number}: {a.players} players · {a.distinct&&a.scoreValid&&a.pmValid?"PASS":"REVIEW"} {a.players!==5?"(not five players)":""} {!a.pmValid?"(plus/minus mismatch)":""}</p>)}
+          <p style={styles.miniText}>This is an audit view; it does not rewrite any recorded totals.</p>
+        </>}
+      </Card>
+    </div>;
+  }
+
    return (
     <div style={styles.app}>
       {renderTopBar()}
@@ -5163,6 +5212,7 @@ function renderPeriodAveragesTab() {
 
       {activeTab === "Live Tracker" && renderLiveTab()}
       {activeTab === "Saved Shifts" && renderSavedShiftsTab()}
+      {activeTab === "Paper Game Sheets" && renderPaperSheetsTab()}
       {activeTab === "Games" && renderGamesTab()}
       {activeTab === "Rankings" && renderRankingsTab()}
       {activeTab === "Leaderboards" && renderLeaderboardsTab()}
